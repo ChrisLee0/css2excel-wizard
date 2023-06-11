@@ -197,7 +197,9 @@ public class CssManager
 
 	private XSSFColor parseXssColor(String colorRule)
 	{
-		Color color = parseColor(colorRule);
+		Color color = builtInColor.get(colorRule);
+		if (color == null)
+			color = parseColor(colorRule);
 		return color == null ? null : new XSSFColor(color);
 	}
 
