@@ -20,9 +20,11 @@ public class CssManager
 
 	Map<String, Map<String, String>> styleRuleMap = new HashMap<>();
 
-	Map<String, String> rootStyle = new HashMap<>();
 	Map<String, Color> builtInColor = new HashMap<>();
 	Map<String, IndexedColors> indexedColorsMap = new HashMap<>();
+
+	XSSFCellStyle rootStyle;
+	XSSFFont rootFont;
 
 
 	public CssManager(Workbook workbook)
@@ -30,6 +32,9 @@ public class CssManager
 		this.workbook = workbook;
 		workbook.getCreationHelper();
 		initBuildIn();
+		this.rootFont = (XSSFFont) workbook.createFont();
+		this.rootStyle = (XSSFCellStyle) workbook.createCellStyle();
+		rootStyle.setFont(rootFont);
 	}
 
 	private void initBuildIn()
@@ -50,11 +55,29 @@ public class CssManager
 			indexedColorsMap.put(values.name().toLowerCase().replace("_", ""), values);
 	}
 
+	private XSSFFont cloneFont(XSSFFont font)
+	{
+		XSSFFont newFont = (XSSFFont) workbook.createFont();
+
+		newFont.setFontName(font.getFontName());
+		newFont.setFontHeightInPoints(font.getFontHeightInPoints());
+		newFont.setFamily(font.getFamily());
+		newFont.setColor(font.getXSSFColor());
+		newFont.setBold(font.getBold());
+		newFont.setItalic(font.getItalic());
+		newFont.setUnderline(font.getUnderline());
+
+		return newFont;
+	}
 
 	public void defineRootStyle(String css)
 	{
 		Map<String, String> cssRule = parseCssRule(css);
-		rootStyle.putAll(cssRule);
+		XSSFFont font = (XSSFFont) workbook.createFont();
+		XSSFCellStyle style = (XSSFCellStyle) workbook.createCellStyle();
+		setStyle(style, font, cssRule);
+		this.rootStyle = style;
+		this.rootFont = font;
 	}
 
 	public void defineStyle(String styleId, String css)
@@ -62,32 +85,29 @@ public class CssManager
 		if (styleMap.containsKey(styleId))
 			throw new IllegalArgumentException(String.format("Style '%s' already defined", styleId));
 
-		Map<String, String> rules = new HashMap<>(rootStyle);
-
 		Map<String, String> computedRules = parseCssRule(css);
-		rules.putAll(computedRules);
+		styleRuleMap.put(styleId, computedRules);
 
-		styleRuleMap.put(styleId, rules);
-
-		styleMap.put(styleId, createStyle(rules));
+		XSSFCellStyle style = (XSSFCellStyle) rootStyle.clone();
+		XSSFFont font = cloneFont(rootFont);
+		setStyle(style, font, computedRules);
 	}
 
 	public void extendStyle(String parentStyleId, String styleId, String css)
 	{
-		if (!styleRuleMap.containsKey(parentStyleId))
+		if (!styleMap.containsKey(parentStyleId))
 			throw new IllegalArgumentException(String.format("Style '%s' does not define", parentStyleId));
 
 		if (styleMap.containsKey(styleId))
 			throw new IllegalArgumentException(String.format("Style '%s' already defined", styleId));
 
-		Map<String, String> rules = new HashMap<>(styleRuleMap.get(parentStyleId));
-
 		Map<String, String> computedRules = parseCssRule(css);
-		rules.putAll(computedRules);
+		styleRuleMap.put(styleId, computedRules);
 
-		styleRuleMap.put(styleId, rules);
-
-		styleMap.put(styleId, createStyle(rules));
+		XSSFCellStyle parentStyle = (XSSFCellStyle) styleMap.get(parentStyleId);
+		XSSFCellStyle style = (XSSFCellStyle) parentStyle.clone();
+		XSSFFont font = cloneFont(parentStyle.getFont());
+		setStyle(style, font, computedRules);
 	}
 
 	public CellStyle getStyle(String id)
@@ -278,10 +298,8 @@ public class CssManager
 	}
 
 
-	private CellStyle createStyle(Map<String, String> rules)
+	private CellStyle setStyle(XSSFCellStyle style, XSSFFont font, Map<String, String> rules)
 	{
-		XSSFFont font = (XSSFFont) workbook.createFont();
-		XSSFCellStyle style = (XSSFCellStyle) workbook.createCellStyle();
 		String[] ruleVals;
 
 		for (String rule : rules.keySet())
