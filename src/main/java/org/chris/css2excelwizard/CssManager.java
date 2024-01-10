@@ -6,10 +6,13 @@ import org.apache.poi.ss.util.RegionUtil;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFFont;
+import org.apache.poi.xssf.usermodel.XSSFRichTextString;
 
 import java.awt.Color;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class CssManager
@@ -17,10 +20,11 @@ public class CssManager
 	Workbook workbook;
 
 	Map<String, CellStyle> styleMap = new HashMap<>();
+	Map<String, CellStyle> parentStyleMap = new HashMap<>();
 
 	Map<String, Map<String, String>> styleRuleMap = new HashMap<>();
 
-	Map<String, Color> builtInColor = new HashMap<>();
+	static Map<String, Color> builtInColor = new HashMap<>();
 	Map<String, IndexedColors> indexedColorsMap = new HashMap<>();
 
 	XSSFCellStyle rootStyle;
@@ -61,7 +65,7 @@ public class CssManager
 
 		newFont.setFontName(font.getFontName());
 		newFont.setFontHeightInPoints(font.getFontHeightInPoints());
-		newFont.setFamily(font.getFamily());
+		//newFont.setFamily(font.getFamily());
 		newFont.setColor(font.getXSSFColor());
 		newFont.setBold(font.getBold());
 		newFont.setItalic(font.getItalic());
@@ -80,7 +84,7 @@ public class CssManager
 		this.rootFont = font;
 	}
 
-	public void defineStyle(String styleId, String css)
+	public CssManager defineStyle(String styleId, String css)
 	{
 		if (styleMap.containsKey(styleId))
 			throw new IllegalArgumentException(String.format("Style '%s' already defined", styleId));
@@ -88,12 +92,17 @@ public class CssManager
 		Map<String, String> computedRules = parseCssRule(css);
 		styleRuleMap.put(styleId, computedRules);
 
-		XSSFCellStyle style = (XSSFCellStyle) rootStyle.clone();
+		XSSFCellStyle style = (XSSFCellStyle) workbook.createCellStyle();
+		style.cloneStyleFrom(rootStyle);
 		XSSFFont font = cloneFont(rootFont);
 		setStyle(style, font, computedRules);
+
+		styleMap.put(styleId, style);
+
+		return this;
 	}
 
-	public void extendStyle(String parentStyleId, String styleId, String css)
+	public CssManager extendStyle(String parentStyleId, String styleId, String css)
 	{
 		if (!styleMap.containsKey(parentStyleId))
 			throw new IllegalArgumentException(String.format("Style '%s' does not define", parentStyleId));
@@ -105,9 +114,15 @@ public class CssManager
 		styleRuleMap.put(styleId, computedRules);
 
 		XSSFCellStyle parentStyle = (XSSFCellStyle) styleMap.get(parentStyleId);
-		XSSFCellStyle style = (XSSFCellStyle) parentStyle.clone();
+		XSSFCellStyle style = (XSSFCellStyle) workbook.createCellStyle();
+		style.cloneStyleFrom(parentStyle);
 		XSSFFont font = cloneFont(parentStyle.getFont());
 		setStyle(style, font, computedRules);
+
+		styleMap.put(styleId, style);
+		parentStyleMap.put(styleId, parentStyle);
+
+		return this;
 	}
 
 	public CellStyle getStyle(String id)
@@ -136,7 +151,7 @@ public class CssManager
 		return map;
 	}
 
-	private Color parseColor(String colorRule)
+	private static Color parseColor(String colorRule)
 	{
 		Color color = builtInColor.get(colorRule);
 		if (color != null)
@@ -215,7 +230,7 @@ public class CssManager
 	}
 
 
-	private XSSFColor parseXssColor(String colorRule)
+	private static XSSFColor parseXssColor(String colorRule)
 	{
 		Color color = builtInColor.get(colorRule);
 		if (color == null)
@@ -390,6 +405,28 @@ public class CssManager
 				case "vertical-align":
 					parseAlign(style, ruleValue, rule);
 					break;
+				case "wrap-text":
+					switch (ruleValue)
+					{
+						case "true":
+							style.setWrapText(true);
+							break;
+						case "false":
+							style.setWrapText(false);
+							break;
+						default:
+							break;
+					}
+					break;
+				case "border":
+					if ("none".equals(ruleValue))
+					{
+						style.setBorderTop(BorderStyle.NONE);
+						style.setBorderRight(BorderStyle.NONE);
+						style.setBorderBottom(BorderStyle.NONE);
+						style.setBorderLeft(BorderStyle.NONE);
+					}
+					break;
 				case "border-color":
 					XSSFColor color = parseXssColor(ruleValue);
 					if (color != null)
@@ -424,10 +461,30 @@ public class CssManager
 
 		style.setFont(font);
 
+		postProcessRule(rules, style);
+
 		return style;
 	}
 
-	private void parseFont(XSSFFont font, String ruleValue)
+	private void postProcessRule(Map<String, String> rules, XSSFCellStyle style)
+	{
+		if (rules.containsKey("border-color") && !rules.containsKey("border-style"))
+		{
+			if (style.getBorderTop() == BorderStyle.NONE.ordinal())
+				style.setBorderTop(BorderStyle.THIN);
+
+			if (style.getBorderRight() == BorderStyle.NONE.ordinal())
+				style.setBorderRight(BorderStyle.THIN);
+
+			if (style.getBorderBottom() == BorderStyle.NONE.ordinal())
+				style.setBorderBottom(BorderStyle.THIN);
+
+			if (style.getBorderLeft() == BorderStyle.NONE.ordinal())
+				style.setBorderLeft(BorderStyle.THIN);
+		}
+	}
+
+	private static void parseFont(XSSFFont font, String ruleValue)
 	{
 		String[] values = ruleValue.split(" ");
 		for (String val : values)
@@ -479,7 +536,7 @@ public class CssManager
 					}
 
 					Color color = builtInColor.get(val);
-					if (color != null)
+					if (color != null && color != Color.BLACK)
 					{
 						font.setColor(new XSSFColor(color));
 						break;
@@ -492,38 +549,193 @@ public class CssManager
 
 	public void applyBorderToMergedCells(Sheet sheet, CellRangeAddress range, String styleId)
 	{
+		if (styleId == null)
+			return;
+
 		Map<String, String> ruleMap = styleRuleMap.get(styleId);
+		if (ruleMap == null)
+			return;
+
+		String border = ruleMap.get("border");
+
+		if ("none".equals(border))
+			return;
+
 		String borderColor = ruleMap.get("border-color");
 		String borderStyle = ruleMap.get("border-style");
 
-		if (borderColor != null)
+		if (borderColor == null)
+			borderColor = "black";
+
+		IndexedColors indexedColors = indexedColorsMap.get(borderColor);
+		if (indexedColors != null)
 		{
-			IndexedColors indexedColors = indexedColorsMap.get(borderColor);
-			if (indexedColors != null)
-			{
-				RegionUtil.setTopBorderColor(indexedColors.index, range, sheet, workbook);
-				RegionUtil.setRightBorderColor(indexedColors.index, range, sheet, workbook);
-				RegionUtil.setBottomBorderColor(indexedColors.index, range, sheet, workbook);
-				RegionUtil.setLeftBorderColor(indexedColors.index, range, sheet, workbook);
-			}
+			RegionUtil.setTopBorderColor(indexedColors.index, range, sheet, workbook);
+			RegionUtil.setRightBorderColor(indexedColors.index, range, sheet, workbook);
+			RegionUtil.setBottomBorderColor(indexedColors.index, range, sheet, workbook);
+			RegionUtil.setLeftBorderColor(indexedColors.index, range, sheet, workbook);
 		}
 
-		if (borderStyle != null)
+		short borderStyleTop;
+		short borderStyleRight;
+		short borderStyleBottom;
+		short borderStyleLeft;
+
+		if (borderStyle == null)
 		{
-			int borderStyleVal = parseBorderStyle(borderStyle);
-			if (borderStyleVal != -1)
+			CellStyle parentStyle = parentStyleMap.get(styleId);
+			if (parentStyle == null)
 			{
-				RegionUtil.setBorderTop(borderStyleVal, range, sheet, workbook);
-				RegionUtil.setBorderRight(borderStyleVal, range, sheet, workbook);
-				RegionUtil.setBorderBottom(borderStyleVal, range, sheet, workbook);
-				RegionUtil.setBorderLeft(borderStyleVal, range, sheet, workbook);
+				borderStyleTop = (short) BorderStyle.THIN.ordinal();
+				borderStyleRight = (short) BorderStyle.THIN.ordinal();
+				borderStyleBottom = (short) BorderStyle.THIN.ordinal();
+				borderStyleLeft = (short) BorderStyle.THIN.ordinal();
 			}
+			else
+			{
+				borderStyleTop = parentStyle.getBorderTop();
+				borderStyleRight = parentStyle.getBorderRight();
+				borderStyleBottom = parentStyle.getBorderBottom();
+				borderStyleLeft = parentStyle.getBorderLeft();
+			}
+		}
+		else
+		{
+			short borderStyleEnum = (short) parseBorderStyle(borderStyle);
+			borderStyleTop = borderStyleEnum;
+			borderStyleRight = borderStyleEnum;
+			borderStyleBottom = borderStyleEnum;
+			borderStyleLeft = borderStyleEnum;
+		}
+
+
+		RegionUtil.setBorderTop(borderStyleTop, range, sheet, workbook);
+		RegionUtil.setBorderRight(borderStyleRight, range, sheet, workbook);
+		RegionUtil.setBorderBottom(borderStyleBottom, range, sheet, workbook);
+		RegionUtil.setBorderLeft(borderStyleLeft, range, sheet, workbook);
+	}
+
+	public RichTexTLocalStyle newRichTexTLocalStyle()
+	{
+		return new RichTexTLocalStyle();
+	}
+
+	public class RichTexTLocalStyle
+	{
+		private Font defaultFont;
+		Map<String, Font> map = new HashMap<>();
+
+		public RichTexTLocalStyle defineDefaultFont(String css)
+		{
+			XSSFFont font = (XSSFFont) workbook.createFont();
+			parseFont(font, css);
+			defaultFont = font;
+			return this;
+		}
+
+		public RichTexTLocalStyle defineFont(String fontId, String css)
+		{
+			XSSFFont font = (XSSFFont) workbook.createFont();
+			parseFont(font, css);
+			if (map.containsKey(fontId))
+				throw new IllegalArgumentException(String.format("Font ID '%s' already defined", fontId));
+			map.put(fontId, font);
+			return this;
+		}
+
+		public Font getDefaultFont()
+		{
+			return defaultFont;
+		}
+
+		public Font get(String fontId)
+		{
+			Font font = map.get(fontId);
+			if (font == null) throw new IllegalStateException("Not found font called '" + fontId + "'");
+			return font;
 		}
 	}
 
-	public RichTextString richText(String text, String defaultFontStyle, String... restFontStyles)
+	private static class RichTexFragment
 	{
+		public final String id;
+		public final int start;
+		public final int end;
 
-		return null;
+		public RichTexFragment(String id, int start, int end)
+		{
+			this.id = id;
+			this.start = start;
+			this.end = end;
+		}
+	}
+
+	public RichTextString richText(String text, RichTexTLocalStyle localStyle)
+	{
+		StringBuilder rawText = new StringBuilder();
+		List<RichTexFragment> position = new ArrayList<>(); // 0:normal  1: in {brace}
+		boolean inBrace = false;
+		int braceStart = -1;
+		String fontId = null;
+		for (int i = 0; i < text.length(); i++)
+		{
+			char ch = text.charAt(i);
+			switch (ch)
+			{
+				case '{':
+					if (inBrace) throw new IllegalStateException("Incorrect Grammar: Nested {brace} not allowed");
+					inBrace = true;
+					int vbar = text.indexOf('|', i + 1);
+					if (vbar == -1 || i + 1 == vbar)
+						throw new IllegalStateException("Incorrect Grammar: No font id followed by between { and |");
+					fontId = text.substring(i + 1, vbar);
+					braceStart = rawText.length();
+					i = vbar;
+					break;
+				case '}':
+
+					if (!inBrace)
+						throw new IllegalStateException("Incorrect Grammar: Unable to end an not started {brace}");
+					inBrace = false;
+					position.add(new RichTexFragment(fontId, braceStart, rawText.length()));
+					break;
+				case '\\':
+					if (i >= text.length() - 1)
+						throw new IllegalStateException("Incorrect Grammar: No character followed by \\");
+					char escape = text.charAt(i + 1);
+					switch (escape)
+					{
+						case '{':
+						case '}':
+						case '\\':
+							rawText.append(escape);
+							i++;
+							break;
+						default:
+							throw new IllegalStateException("Incorrect Grammar: Unsupported escape character " + escape);
+					}
+					break;
+				default:
+					rawText.append(ch);
+					break;
+			}
+		}
+
+		XSSFRichTextString richTextString = new XSSFRichTextString(rawText.toString());
+		if (position.isEmpty()) richTextString.applyFont(0, rawText.length(), localStyle.getDefaultFont());
+		else
+		{
+			int startCursor = 0;
+			for (RichTexFragment richTexFragment : position)
+			{
+				if (startCursor < richTexFragment.start && localStyle.getDefaultFont() != null)
+					richTextString.applyFont(startCursor, richTexFragment.start, localStyle.getDefaultFont());
+				richTextString.applyFont(richTexFragment.start, richTexFragment.end, localStyle.get(richTexFragment.id));
+				startCursor = richTexFragment.end;
+			}
+			if (startCursor < rawText.length() - 1 && localStyle.getDefaultFont() != null)
+				richTextString.applyFont(startCursor, rawText.length(), localStyle.getDefaultFont());
+		}
+		return richTextString;
 	}
 }

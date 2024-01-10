@@ -9,6 +9,21 @@ import java.util.List;
 
 public class LayoutManager
 {
+	public void autoWidthFitsContent(int index)
+	{
+		sheet.autoSizeColumn(index);
+	}
+
+	public int getCurrentRow()
+	{
+		return row;
+	}
+
+	public int getMaxCol()
+	{
+		return maxCol;
+	}
+
 	private class MergedCell
 	{
 		int row;
@@ -29,6 +44,8 @@ public class LayoutManager
 
 	private int row = 0;
 	private int col = 0;
+
+	private int maxCol = 1;
 	private Sheet sheet;
 	private Row rowObj;
 
@@ -96,6 +113,15 @@ public class LayoutManager
 			cell.setCellStyle(style);
 	}
 
+	private void applyStyle(Cell cell, CellStyle style, Object content)
+	{
+		if (content != null)
+			setContent(cell, content);
+
+		if (style != null)
+			cell.setCellStyle(style);
+	}
+
 	LayoutManager newRow()
 	{
 		rowObj = sheet.createRow(row++);
@@ -121,6 +147,18 @@ public class LayoutManager
 	LayoutManager cell()
 	{
 		col++;
+		return this;
+	}
+
+	public LayoutManager cell(String styleId, Object... contents)
+	{
+		CellStyle style = styleId == null ? cssManager.rootStyle : cssManager.getStyle(styleId);
+
+		if (contents == null || contents.length == 0)
+			applyStyle(rowObj.createCell(col++), style, null);
+		else
+			for (Object content : contents)
+				applyStyle(rowObj.createCell(col++), style, content);
 		return this;
 	}
 
